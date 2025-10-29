@@ -228,17 +228,14 @@ def alert_if_needed(df: pd.DataFrame, threshold=80.0, min_liq=100_000):
     # Telegram n’aime pas parfois la virgule de formatage — on nettoie :
     msg = msg.replace(",", " ")
     send(msg)
-
-if __name__ == "__main__":
+def entry():
     n, df = run_once()
     alert_if_needed(df, threshold=80.0, min_liq=100_000)
-# --- Sécurité pour GitHub Actions ---
-import sys
 
 if __name__ == "__main__":
     try:
-        # ton code existant tourne ici normalement
-        pass
+        entry()
     except SystemExit:
-        # empêche l'erreur "exit code 1" quand aucun résultat
+        import sys
+        # Empêche l'échec du workflow quand il n'y a aucun candidat
         sys.exit(0)
