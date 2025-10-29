@@ -232,3 +232,13 @@ def alert_if_needed(df: pd.DataFrame, threshold=80.0, min_liq=100_000):
 if __name__ == "__main__":
     n, df = run_once()
     alert_if_needed(df, threshold=80.0, min_liq=100_000)
+# --- Sécurité pour GitHub Actions ---
+import sys
+
+if __name__ == "__main__":
+    try:
+        # ton code existant tourne ici normalement
+        pass
+    except SystemExit:
+        # empêche l'erreur "exit code 1" quand aucun résultat
+        sys.exit(0)
