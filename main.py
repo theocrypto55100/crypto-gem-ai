@@ -272,3 +272,8 @@ def alert_if_needed(df, threshold=80.0, min_liq=15_000):
     send(msg)
     save_alert(top)
     print("✅ Alerte envoyée & loggée.")
+
+# --- Test Telegram ---
+if __name__ == "__main__":
+    from notify import send
+    send("🚀 Test réussi : le bot CryptoGem est bien connecté à Telegram.")
