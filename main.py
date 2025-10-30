@@ -210,10 +210,16 @@ def run_once():
     return len(df), df
 
 def alert_if_needed(df: pd.DataFrame, threshold=80.0, min_liq=100_000):
-    if df is None or df.empty:
-        print("Aucune alerte (liste vide).")
-        return
-    top = df[(df["Score"] >= threshold) & (df["Liquidité_USD"] >= min_liq)].copy()
+import pandas as pd
+
+# Normalise df au bon format
+if isinstance(df, (list, tuple)):
+    df = pd.DataFrame(df)
+
+# Si df est vide ou None → sortie sans erreur
+if df is None or (hasattr(df, "empty") and df.empty) or len(df) == 0:
+    print("⚠️ Aucun candidat après filtres — sortie normale.")
+    return
     if top.empty:
         print("Aucune alerte (seuil non atteint).")
         return
