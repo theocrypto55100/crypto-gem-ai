@@ -209,39 +209,30 @@ def run_once():
     print(f"💾 {len(df)} projets sauvegardés (snapshot {ts})")
     return len(df), df
 
-def alert_if_needed(df: pd.DataFrame, threshold=80.0, min_liq=100_000):
-import pandas as pd
+def alert_if_needed(df, threshold=80.0, min_liq=100_000):
+    import pandas as pd
 
-# Normalise df au bon format
-if isinstance(df, (list, tuple)):
-    df = pd.DataFrame(df)
+    # Normalise df au bon format
+    if isinstance(df, (list, tuple)):
+        df = pd.DataFrame(df)
 
-# Si df est vide ou None → sortie sans erreur
-if df is None or (hasattr(df, "empty") and df.empty) or len(df) == 0:
-    print("⚠️ Aucun candidat après filtres — sortie normale.")
-    return
+    # Si df est vide ou None → sortie sans erreur
+    if df is None or (hasattr(df, "empty") and df.empty) or len(df) == 0:
+        print("⚠️ Aucun candidat après filtres — sortie normale.")
+        return
+
+    top = df[(df["Score"] >= threshold) & (df["Liquidité_USD"] >= min_liq)].copy()
     if top.empty:
         print("Aucune alerte (seuil non atteint).")
         return
-    top = top.sort_values(["Score","Liquidité_USD","Volume24h_USD"], ascending=False).head(1).iloc[0]
+
+    top = top.sort_values(["Score", "Liquidité_USD", "Volume24h_USD"], ascending=False).head(1).iloc[0]
     msg = (
         f"🚀 *Candidat détecté*\n"
-        f"*{top['Pair']}* — `{top['Chain']}`\n"
-        f"Score: *{top['Score']}*/100\n"
-        f"Liq: ${int(top['Liquidité_USD']):,} | Vol24h: ${int(top['Volume24h_USD']):,} | Tx5: {int(top['Tx_5min'])}\n"
+        f"*{top['Pair']}* – *{top['Chain']}*\n"
+        f"*Score:* {top['Score']} /100\n"
+        f"*Liq:* ${int(top['Liquidité_USD'])} | V24h: ${int(top['Volume24h_USD'])} | TX5: {int(top['TX_5min'])}\n"
         f"{top['URL']}"
     )
-    # Telegram n’aime pas parfois la virgule de formatage — on nettoie :
     msg = msg.replace(",", " ")
     send(msg)
-def entry():
-    n, df = run_once()
-    alert_if_needed(df, threshold=80.0, min_liq=100_000)
-
-if __name__ == "__main__":
-    try:
-        entry()
-    except SystemExit:
-        import sys
-        # Empêche l'échec du workflow quand il n'y a aucun candidat
-        sys.exit(0)
