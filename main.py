@@ -209,30 +209,66 @@ def run_once():
     print(f"💾 {len(df)} projets sauvegardés (snapshot {ts})")
     return len(df), df
 
-def alert_if_needed(df, threshold=80.0, min_liq=100_000):
+def is_suspicious_name(name: str) -> bool:
+    if not name:
+        return True
+    name = name.lower()
+    bad_words = [
+        "test", "scam", "rug", "honeypot", "airdrop", "free",
+        "pump", "elon", "pepepepe", "shit", "fake"
+    ]
+    return any(w in name for w in bad_words)
+
+def save_alert(row):
+    import os, csv, datetime
+    os.makedirs("history", exist_ok=True)
+    path = "history/alertes.csv"
+    is_new = not os.path.exists(path)
+    with open(path, "a", newline="") as f:
+        writer = csv.writer(f)
+        if is_new:
+            writer.writerow(["ts", "pair", "chain", "liq_usd", "score", "url"])
+        writer.writerow([
+            datetime.datetime.utcnow().isoformat(),
+            row.get("Pair", ""),
+            row.get("Chain", ""),
+            row.get("Liquidité_USD", ""),
+            row.get("Score", ""),
+            row.get("URL", ""),
+        ])
+
+def alert_if_needed(df, threshold=80.0, min_liq=15_000):
     import pandas as pd
 
-    # Normalise df au bon format
     if isinstance(df, (list, tuple)):
         df = pd.DataFrame(df)
 
-    # Si df est vide ou None → sortie sans erreur
     if df is None or (hasattr(df, "empty") and df.empty) or len(df) == 0:
         print("⚠️ Aucun candidat après filtres — sortie normale.")
         return
 
-    top = df[(df["Score"] >= threshold) & (df["Liquidité_USD"] >= min_liq)].copy()
-    if top.empty:
+    df = df[(df["Liquidité_USD"] >= min_liq)]
+    df = df.sort_values(["Score", "Liquidité_USD", "Volume24h_USD"], ascending=False)
+    df = df[df["Score"] >= threshold]
+
+    if df.empty:
         print("Aucune alerte (seuil non atteint).")
         return
 
-    top = top.sort_values(["Score", "Liquidité_USD", "Volume24h_USD"], ascending=False).head(1).iloc[0]
+    top = df.head(1).iloc[0]
+
+    if is_suspicious_name(top.get("Pair", "")):
+        print("❗Projet ignoré : nom suspect")
+        return
+
     msg = (
-        f"🚀 *Candidat détecté*\n"
-        f"*{top['Pair']}* – *{top['Chain']}*\n"
-        f"*Score:* {top['Score']} /100\n"
-        f"*Liq:* ${int(top['Liquidité_USD'])} | V24h: ${int(top['Volume24h_USD'])} | TX5: {int(top['TX_5min'])}\n"
+        f"🔥 Nouveau projet\n"
+        f"{top['Pair']} – {top['Chain']}\n"
+        f"Liq: ${int(top['Liquidité_USD'])} | V24h: ${int(top['Volume24h_USD'])}\n"
+        f"Score: {top['Score']}/100\n"
         f"{top['URL']}"
     )
     msg = msg.replace(",", " ")
     send(msg)
+    save_alert(top)
+    print("✅ Alerte envoyée & loggée.")
