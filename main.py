@@ -8,22 +8,29 @@ import requests
 import pandas as pd
 
 # ------------------------------------------------------------
-# Config globale
+# CONFIG GLOBALE
 # ------------------------------------------------------------
 DEX_URL = "https://api.dexscreener.com/latest/dex/search"
-MIN_LIQ = 50_000        # liquidité mini pour considérer
-MIN_VOL24 = 25_000      # volume 24h mini
-BAN_BASE = {"USDT", "USDC", "DAI", "TUSD", "FDUSD", "USDE"}  # éviter stables comme "projet"
+
+# on élargit pour choper des petits projets
+MIN_LIQ = 8_000          # avant 50 000
+MIN_VOL24 = 5_000        # avant 25 000
+
+# on évite les "projets" qui sont juste des stables
+BAN_BASE = {"USDT", "USDC", "DAI", "TUSD", "FDUSD", "USDE"}
+
+# fichier où on garde l’historique des alertes envoyées
 HISTORY_FILE = Path("history_alerts.json")
 
-# import de l'env GitHub (TOKEN & CHAT_ID) dans notify.py
+# notif Telegram (prend le TOKEN et le CHAT_ID dans les secrets GitHub)
 from notify import send
 
 
 # ------------------------------------------------------------
-# Utils HTTP
+# OUTILS
 # ------------------------------------------------------------
 def http_get(url, params=None, retries=3, timeout=20):
+    """GET robuste pour Dexscreener"""
     for i in range(retries):
         try:
             r = requests.get(url, params=params, timeout=timeout)
@@ -37,7 +44,7 @@ def http_get(url, params=None, retries=3, timeout=20):
 
 
 def safe(d, path, default=None):
-    """Accès dict sécurisé: safe(d, ["a","b"], 0)."""
+    """Accès sécurisé dans un gros dict JSON."""
     cur = d
     for p in path:
         if not isinstance(cur, dict) or p not in cur:
@@ -47,7 +54,7 @@ def safe(d, path, default=None):
 
 
 # ------------------------------------------------------------
-# Pondération par chain (à affiner plus tard)
+# PONDÉRATION PAR CHAÎNE
 # ------------------------------------------------------------
 CHAIN_WEIGHT = {
     "ethereum": 1.00,
@@ -64,7 +71,7 @@ def chain_weight(chain_id: str) -> float:
 
 
 # ------------------------------------------------------------
-# Scoring principal
+# SCORING PRINCIPAL (0 → 100)
 # ------------------------------------------------------------
 def score_pair(p):
     liq = float(safe(p, ["liquidity", "usd"], 0) or 0)
@@ -74,33 +81,34 @@ def score_pair(p):
     tx5 = tx_b + tx_s
 
     s = 0.0
+
     # Liquidité
+    if liq >= 8_000: s += 10
+    if liq >= 15_000: s += 10
     if liq >= 50_000: s += 10
-    if liq >= 100_000: s += 10
-    if liq >= 250_000: s += 10
-    if liq >= 500_000: s += 5
+    if liq >= 100_000: s += 5
 
     # Volume 24h
+    if vol24 >= 5_000: s += 10
+    if vol24 >= 25_000: s += 10
     if vol24 >= 100_000: s += 10
-    if vol24 >= 500_000: s += 10
-    if vol24 >= 1_000_000: s += 10
-    if vol24 >= 5_000_000: s += 5
+    if vol24 >= 500_000: s += 5
 
-    # Activité m5
+    # Activité court terme
+    if tx5 >= 10: s += 5
     if tx5 >= 25: s += 5
-    if tx5 >= 75: s += 7
-    if tx5 >= 150: s += 8
+    if tx5 >= 75: s += 5
 
-    # Pénalités sur chutes violentes
+    # Pénalités si ça dump fort
     ch1 = float(safe(p, ["priceChange", "h1"], 0) or 0)
     ch6 = float(safe(p, ["priceChange", "h6"], 0) or 0)
     if ch1 <= -20: s -= 5
     if ch6 <= -35: s -= 5
 
-    # Bonus par chain
+    # Bonus selon la chaîne
     s *= chain_weight(p.get("chainId", ""))
 
-    # Bornes
+    # bornes
     s = max(0.0, min(100.0, s))
     return s, liq, vol24, tx5
 
@@ -122,7 +130,7 @@ def build_row(p, s, liq, vol24, tx5):
 
 
 # ------------------------------------------------------------
-# Anti-noms chelous (peut être durci ensuite)
+# FILTRE SUR LES NOMS NULS / SUSPECTS
 # ------------------------------------------------------------
 def is_suspicious_name(name: str) -> bool:
     if not name:
@@ -136,10 +144,10 @@ def is_suspicious_name(name: str) -> bool:
 
 
 # ------------------------------------------------------------
-# Sauvegarde d'une alerte pour la suivre plus tard
+# SAUVEGARDE D’UNE ALERTE POUR LE SUIVI
 # ------------------------------------------------------------
 def save_alert_row(row: dict):
-    """Enregistre une alerte envoyée pour pouvoir la suivre plus tard."""
+    """On garde toutes les alertes envoyées pour les suivre plus tard."""
     alert = {
         "pair": row.get("Pair"),
         "chain": row.get("Chain"),
@@ -164,10 +172,12 @@ def save_alert_row(row: dict):
 
 
 # ------------------------------------------------------------
-# Run principal : récupère Dexscreener, filtre, score, CSV
+# SCAN PRINCIPAL
 # ------------------------------------------------------------
 def run_once():
     print("🔎 Récupération des nouvelles paires de tokens…")
+
+    # on commence par USDT
     raw = http_get(DEX_URL, params={"q": "USDT"}, retries=3, timeout=20)
     pairs = raw.get("pairs", []) or []
 
@@ -175,13 +185,14 @@ def run_once():
 
     kept = []
     for p in pairs:
+        # on évite les stables en base
         base_sym = (safe(p, ["baseToken", "symbol"], "") or "").upper()
-        # on dégage les “USDT/USDC…” en base
         if base_sym in BAN_BASE:
             continue
 
         s, liq, vol24, tx5 = score_pair(p)
 
+        # gros filtres de base
         if liq < MIN_LIQ or vol24 < MIN_VOL24:
             continue
 
@@ -191,7 +202,6 @@ def run_once():
         print("⚠️ Aucun candidat après filtres.")
         return 0, []
 
-    # DataFrame principal
     df = pd.DataFrame(kept).sort_values(
         ["Score", "Liquidité_USD", "Volume24h_USD"],
         ascending=False
@@ -204,7 +214,6 @@ def run_once():
     df.to_csv(f"history/top_projets_{ts}.csv", index=False)
     print(f"💾 {len(df)} projets sauvegardés (snapshot {ts})")
 
-    # affichage console (utile dans GitHub Actions)
     print("\n🏆 Top projets :")
     print(df.head(10).to_string(index=False))
 
@@ -212,37 +221,40 @@ def run_once():
 
 
 # ------------------------------------------------------------
-# Partie “alerte”
+# ENVOI D’ALERTE SI VRAI CANDIDAT
 # ------------------------------------------------------------
-def alert_if_needed(df, threshold=80.0, min_liq=15_000):
-    # si on reçoit une liste → on la transforme
+def alert_if_needed(df, threshold=55.0, min_liq=6_000):
+    # GitHub Actions nous envoie parfois une liste → on la transforme
     if isinstance(df, (list, tuple)):
         df = pd.DataFrame(df)
 
-    # si rien → on sort propre
     if df is None or (hasattr(df, "empty") and df.empty) or len(df) == 0:
         print("⚠️ Aucun candidat après filtres — sortie normale.")
         return
 
-    # filtres finaux
-    df = df[(df["Liquidité_USD"] >= min_liq)]
-    df = df.sort_values(["Score", "Liquidité_USD", "Volume24h_USD"], ascending=False)
+    # garde les projets pas trop minus
+    df = df[df["Liquidité_USD"] >= min_liq]
+
+    # garde ceux qui ont un score correct
     df = df[df["Score"] >= threshold]
+
+    # trie
+    df = df.sort_values(["Score", "Liquidité_USD", "Volume24h_USD"], ascending=False)
 
     if df.empty:
         print("ℹ️ Aucune alerte envoyée (seuil non atteint).")
         return
 
+    # on prend le meilleur
     top = df.head(1).iloc[0]
 
-    # anti-nom chelou
+    # filtre nom chelou
     if is_suspicious_name(top.get("Pair", "")):
         print("❗ Projet ignoré : nom suspect")
         return
 
-    # message Telegram
     msg = (
-        "🔥 Nouveau projet détecté\n"
+        "🔥 Nouveau petit projet détecté\n"
         f"Pair : {top['Pair']} – {top['Chain']}\n"
         f"Liq: ${int(top['Liquidité_USD'])} | V24h: ${int(top['Volume24h_USD'])}\n"
         f"Score: {top['Score']}/100\n"
@@ -255,13 +267,8 @@ def alert_if_needed(df, threshold=80.0, min_liq=15_000):
 
 
 # ------------------------------------------------------------
-# Entrée du script (pour GitHub Actions)
+# POINT D’ENTRÉE
 # ------------------------------------------------------------
 if __name__ == "__main__":
-    # 1. on fait tourner le scan
     n, df = run_once()
-    # 2. on envoie une alerte seulement si fort candidat
-    alert_if_needed(df, threshold=80.0, min_liq=15_000)
-
-    # 3. (optionnel) petit test de liaison Telegram
-    # send("🚀 Test réussi : le bot CryptoGem est bien connecté à Telegram.")
+    alert_if_needed(df, threshold=55.0, min_liq=6_000)
